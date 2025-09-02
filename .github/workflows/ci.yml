@@ -146,14 +146,28 @@ jobs:
         run: |
           set -euo pipefail
           cd "${GITOPS_REPO}"
+
           NEW_TAG="${GITHUB_SHA::7}"
           NEW_REPO="${{ steps.meta.outputs.image }}"
-          # Ensure .image.repository points to your ECR path (defensive)
-          yq -i '.image.repository = strenv(NEW_REPO)' "${{ env.VALUES_FILE }}"
-          # Bump the tag
-          yq -i '.image.tag = strenv(NEW_TAG)' "${{ env.VALUES_FILE }}"
-          echo "Result:"
+
+          # Safety checks
+          if [ -z "$NEW_REPO" ] || [ -z "$NEW_TAG" ]; then
+            echo "ERROR: NEW_REPO or NEW_TAG resolved empty. Aborting to avoid blanking values.yaml."
+            echo "NEW_REPO='$NEW_REPO'  NEW_TAG='$NEW_TAG'"
+            exit 1
+          fi
+
+          # Update using --arg (doesn't rely on exported env)
+          yq -i \
+            --arg repo "$NEW_REPO" \
+            --arg tag  "$NEW_TAG" \
+            '.image.repository = $repo | .image.tag = $tag' \
+            "${{ env.VALUES_FILE }}"
+
+          echo "Result after edit:"
           yq '.image' "${{ env.VALUES_FILE }}"
+          # 🔒 guard-rail: fail if either is empty
+          yq -e '.image.repository != "" and .image.tag != ""' "${{ env.VALUES_FILE }}"
 
       - name: Commit & push bump branch
         if: startsWith(github.ref_name, 'feature/')
