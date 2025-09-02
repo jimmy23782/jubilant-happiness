@@ -1,10 +1,11 @@
-name: CI (Build & Test)
+name: CI and Push to ECR (Build, Test, Push, Bump GitOps)
 
 on:
   push:
-    branches: ["feature/**", "feat/**"]   # Adjust branches as needed
+    branches: ["main", "feature/**", "feat/**"]
   pull_request:
     branches: ["**"]
+
 permissions:
   contents: read
   id-token: write   # required for OIDC → AWS
@@ -14,12 +15,18 @@ env:
   ECR_REPO: students-demo
   IMAGE_PLATFORMS: linux/amd64
 
+  # --- GitOps details (Option A) ---
+  GITOPS_OWNER: "jimmy23782"
+  GITOPS_REPO: "GitOpsRepo"
+  GITOPS_BRANCH: "feature/setuphelmcharts"     # <- you wanted bumps here
+  VALUES_FILE: "gitopsRepo/helm-charts/myapp/values.yaml"  # <- put your real path
+
 jobs:
   build-test-push:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout (app repo)
         uses: actions/checkout@v4
 
       - name: Set up JDK 17 (Temurin)
@@ -35,8 +42,7 @@ jobs:
       - name: Build & run unit tests
         run: ./gradlew clean test --no-daemon
 
-      # Optional: upload HTML report so you can download it from Actions UI
-      - name: Upload test report
+      - name: Upload test report (always)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -92,3 +98,98 @@ jobs:
           echo "Pushed:"
           echo " - ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag_branch }}"
           echo " - ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag_sha }}"
+
+      # -----------------------------
+      # Option A: bump GitOps repo (only on branch mentioned above)
+      # -----------------------------
+      - name: Install yq (YAML CLI)
+        if: startsWith(github.ref_name, 'feature/')
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Configure Git author
+        if: startsWith(github.ref_name, 'feature/')
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Clone GitOps repo
+        if: startsWith(github.ref_name, 'feature/')
+        env:
+          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GITOPS_TOKEN:-}" ]; then
+            echo "ERROR: Please add a repo-scoped PAT in GitHub Secrets named GITOPS_TOKEN (write access to ${GITOPS_OWNER}/${GITOPS_REPO})." >&2
+            exit 1
+          fi
+          git clone "https://${GITOPS_TOKEN}@github.com/${GITOPS_OWNER}/${GITOPS_REPO}.git"
+          cd "${GITOPS_REPO}"
+          git fetch origin "${GITOPS_BRANCH}"
+          git checkout "${GITOPS_BRANCH}"
+
+      - name: Create bump branch
+        if: startsWith(github.ref_name, 'feature/')
+        id: bump
+        run: |
+          set -euo pipefail
+          cd "${GITOPS_REPO}"
+          SHA="${GITHUB_SHA::7}"
+          BRANCH="bump/${{ env.ECR_REPO }}-${SHA}"
+          git checkout -b "${BRANCH}"
+          echo "branch=${BRANCH}" >> $GITHUB_OUTPUT
+
+      - name: Update values.yaml image.tag (and ensure repo)
+        if: startsWith(github.ref_name, 'feature/')
+        run: |
+          set -euo pipefail
+          cd "${GITOPS_REPO}"
+          NEW_TAG="${GITHUB_SHA::7}"
+          NEW_REPO="${{ steps.meta.outputs.image }}"
+          # Ensure .image.repository points to your ECR path (defensive)
+          yq -i '.image.repository = strenv(NEW_REPO)' "${{ env.VALUES_FILE }}"
+          # Bump the tag
+          yq -i '.image.tag = strenv(NEW_TAG)' "${{ env.VALUES_FILE }}"
+          echo "Result:"
+          yq '.image' "${{ env.VALUES_FILE }}"
+
+      - name: Commit & push bump branch
+        if: startsWith(github.ref_name, 'feature/')
+        run: |
+          set -euo pipefail
+          cd "${GITOPS_REPO}"
+          git add "${{ env.VALUES_FILE }}"
+          git commit -m "chore: bump ${{ env.ECR_REPO }} image tag to ${GITHUB_SHA::7}"
+          git push --set-upstream origin "${{ steps.bump.outputs.branch }}"
+
+      - name: Open PR to GitOps repo
+        if: startsWith(github.ref_name, 'feature/')
+        env:
+          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y >/dev/null
+          sudo apt-get install -y jq >/dev/null
+
+          REPO="${{ env.GITOPS_OWNER }}/${{ env.GITOPS_REPO }}"
+          HEAD_BRANCH="${{ steps.bump.outputs.branch }}"
+          BASE_BRANCH="${{ env.GITOPS_BRANCH }}"
+          TITLE="Bump ${{ env.ECR_REPO }} to ${GITHUB_SHA::7}"
+          BODY="Automated bump from app build. Image: \`${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag_sha }}\`"
+
+          RESP=$(curl -s -X POST \
+            -H "Authorization: token ${GITOPS_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${REPO}/pulls \
+            -d "$(jq -n --arg t "$TITLE" --arg h "$HEAD_BRANCH" --arg b "$BASE_BRANCH" --arg body "$BODY" \
+                  '{title:$t, head:$h, base:$b, body:$body}')")
+
+          if echo "$RESP" | jq -e '.html_url' >/dev/null; then
+            echo "PR created: $(echo "$RESP" | jq -r '.html_url')"
+          else
+            echo "PR response:"
+            echo "$RESP"
+            echo "If a similar PR already exists, you can enable auto-merge or allow direct pushes instead."
+          fi

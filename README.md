@@ -9,7 +9,7 @@ Playing with microservices, Docker, and EKS
 - An identity that other principals (here GitHub) can assume to get temporary credentials.
 - Has no power by itself until you add **policies**.
 
-### B) Trust Policy (attached to the role)
+### B) Trust Policy (attached to the role above)
 - Defines **who** may assume this role and under what conditions.
 - In your case:
   - **Principal**: GitHub’s OIDC provider (`token.actions.githubusercontent.com`)
