@@ -147,26 +147,30 @@ jobs:
           set -euo pipefail
           cd "${GITOPS_REPO}"
 
-          NEW_TAG="${GITHUB_SHA::7}"
-          NEW_REPO="${{ steps.meta.outputs.image }}"
+          # Derive new values
+          export NEW_TAG="${GITHUB_SHA::7}"
+          export NEW_REPO="685801731369.dkr.ecr.ap-southeast-2.amazonaws.com/students-demo"
 
-          # Safety checks
+          # Safety checks (avoid blanking values)
           if [ -z "$NEW_REPO" ] || [ -z "$NEW_TAG" ]; then
-            echo "ERROR: NEW_REPO or NEW_TAG resolved empty. Aborting to avoid blanking values.yaml."
+            echo "ERROR: NEW_REPO or NEW_TAG resolved empty. Aborting."
             echo "NEW_REPO='$NEW_REPO'  NEW_TAG='$NEW_TAG'"
             exit 1
           fi
 
-          # Update using --arg (doesn't rely on exported env)
-          yq -i \
-            --arg repo "$NEW_REPO" \
-            --arg tag  "$NEW_TAG" \
-            '.image.repository = $repo | .image.tag = $tag' \
-            "${{ env.VALUES_FILE }}"
+          # Ensure yq v4 is present (and visible for debugging)
+          yq --version
+
+          # Update using env(...) / strenv(...) in yq v4
+          yq -i '
+            .image.repository = strenv(NEW_REPO) |
+            .image.tag        = strenv(NEW_TAG)
+          ' "${{ env.VALUES_FILE }}"
 
           echo "Result after edit:"
           yq '.image' "${{ env.VALUES_FILE }}"
-          # 🔒 guard-rail: fail if either is empty
+
+          # Guard-rail: fail if either is empty
           yq -e '.image.repository != "" and .image.tag != ""' "${{ env.VALUES_FILE }}"
 
       - name: Commit & push bump branch
