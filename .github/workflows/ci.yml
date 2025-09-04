@@ -19,7 +19,7 @@ env:
   GITOPS_OWNER: "jimmy23782"
   GITOPS_REPO: "GitOpsRepo"
   GITOPS_BRANCH: "feature/setuphelmcharts"     # <- you wanted bumps here
-  VALUES_FILE: "gitopsRepo/helm-charts/myapp/values.yaml"  # <- put your real path
+  VALUES_FILE: "gitopsRepo/gitops/env/dev/values.yaml"  # <- put your real path
 
 jobs:
   build-test-push:
