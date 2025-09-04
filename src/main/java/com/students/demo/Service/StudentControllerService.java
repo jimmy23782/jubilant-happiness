@@ -9,6 +9,6 @@ public class StudentControllerService {
     
     public List<String> studentList(){
 
-        return List.of("Alice", "Bob", "Charlie");
+        return List.of("Alice", "Bob", "Charlie","Lodada");
     }
 }
