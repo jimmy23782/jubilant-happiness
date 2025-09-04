@@ -15,7 +15,7 @@ class StudentControllerServiceTest {
 
         // Basic assertions
         assertNotNull(students, "The student list should not be null");
-        assertEquals(3, students.size(), "The student list should contain 3 entries");
+        assertEquals(4, students.size(), "The student list should contain 4 entries");
 
         // Validate contents
         assertTrue(students.contains("Alice"), "Student list should contain Alice");
